@@ -20,21 +20,15 @@ if __name__ == "__main__":
     \n\t * Computing two sets of MBIR reconstructions with each sinogram weight respectively;\
     \n\t * Displaying the results.\n')
     # ###################### User defined params. Change the parameters below for your own use case.
-    output_path = './output/mbir_vertical/'  # path to store output recon images
+    output_path = './output/mbir_horizontal/'  # path to store output recon images
     os.makedirs(output_path, exist_ok=True)  # mkdir if directory does not exist
 
-    # ##### params for dataset downloading. User may change these parameters for their own datasets.
-    # An example NSI dataset (tarball) will be downloaded from `dataset_url`, and saved to `download_dir`.
-    # url to NSI dataset.
-    dataset_url = 'https://engineering.purdue.edu/~bouman/data_repository/data/mar_demo_data.tgz'
-    # destination path to download and extract the NSI data and metadata.
-    download_dir = './demo_data/'
     # Path to NSI scan directory.
-    _, dataset_dir = demo_utils.download_and_extract_tar(dataset_url, download_dir)
+    dataset_dir = "/depot/bouman/data/share_conebeam_data/new_MAR_phantom/horiz_metal_with_corrections"
 
     # #### preprocessing parameters
     downsample_factor = [4, 4]  # downsample factor of scan images along detector rows and detector columns.
-    subsample_view_factor = 1  # view subsample factor.
+    subsample_view_factor = 4  # view subsample factor.
 
     # #### recon parameters
     sharpness = 0.0
@@ -63,16 +57,20 @@ if __name__ == "__main__":
     # Set additional geometry arguments
     ct_model.set_params(**optional_params)
 
+    # Set image voxel size to be the same as the voxel size from the vertical pose recon
+    # this step is to ensure a rigid body transformation
+    ct_model.set_params(delta_voxel=0.28700696664031833)
+    
     # Set reconstruction parameter values
     ct_model.set_params(sharpness=sharpness, verbose=1, positivity_flag=True)
 
     # Print out model parameters
     ct_model.print_params()
-
     print("\n*******************************************************",
           "\n******* Calculate transmission sinogram weights *******",
           "\n*******************************************************")
     weights_trans = ct_model.gen_weights(sino, weight_type='transmission')
+    
     print("\n*******************************************************",
           "\n**** Perform recon with transmission_root weights. ****",
           "\n*******************************************************")
@@ -86,32 +84,31 @@ if __name__ == "__main__":
     recon.block_until_ready()
     elapsed = time.time() - time0
     print('Elapsed time for initial recon is {:.3f} seconds'.format(elapsed))
-    np.save(os.path.join(output_path, "recon_vertical.npy"), recon)
-    # ##########################
+    np.save(os.path.join(output_path, "recon_horizontal.npy"), recon)
     
     print("\n*******************************************************",
           "\n*********** Perform image transformation. *************",
           "\n*******************************************************")
-    print("Manually rotate the recon images to an upright pose.")
-    transform_info_vert_to_upright = sitk.Euler3DTransform()
-    transform_info_vert_to_upright.SetRotation(0, np.deg2rad(17.165), 0)
-    # save transform information to disk
-    sitk.WriteTransform(transform_info_vert_to_upright, "registration_info/transform_info_vert_to_upright.tfm")
-
+    print("Load transformation information that maps the image from the horizontal meausurement pose to an upright pose.")
+    # The upright pose is defined by manually rotating the vertical pose reconstruction.
+    # The transformation information from the horizontal pose to upright pose is estimated using the image registration module in 3D Slicer. 
+    # For simplicity, this transformation information is directly provided to the user in a tfm file.
+    transform_info_horiz_to_upright = sitk.ReadTransform("registration_info/transform_info_horiz_to_upright.tfm") # load the transformation information from horizontal pose to the upright pose
+    
     # apply the transformation to the recon array
-    recon_transformed = transform_utils.transformer_sitk(recon, transform_info_vert_to_upright)
+    recon_transformed = transform_utils.transformer_sitk(recon, transform_info_horiz_to_upright, output_size=(384,384,480))
+    
     print("\n*******************************************************",
-          "\n********* Display results in different poses. *********",
+          "\n******** Display results in the upright pose. *********",
           "\n*******************************************************")
     # change the image data shape to (slices, rows, cols), so that the rotation axis points up when viewing the coronal/sagittal slices with mbirjax slice_viewer
-    recon = np.transpose(recon, (2, 1, 0))
-    recon = recon[:, :, ::-1]
-
     recon_transformed = np.transpose(recon_transformed, (2, 1, 0))
     recon_transformed = recon_transformed[:, :, ::-1]
-    
+
     # ##### display the results in measurement and reconstruction poses respectively
     vmax = downsample_factor[0] * 0.008
-    pu.slice_viewer(recon, vmin=0, vmax=vmax, slice_axis=1, slice_label='Coronal Slice', title='MBIRJAX recon, measurement pose')
+    pu.slice_viewer(recon_transformed, vmin=0, vmax=vmax, slice_axis=2, slice_label='Sagittal Slice', title='MBIRJAX recon, upright pose')
     pu.slice_viewer(recon_transformed, vmin=0, vmax=vmax, slice_axis=1, slice_label='Coronal Slice', title='MBIRJAX recon, upright pose')
+    pu.slice_viewer(recon_transformed, vmin=0, vmax=vmax, slice_axis=0, slice_label='Axial Slice', title='MBIRJAX recon, upright pose')
+    
     print("Done.")
