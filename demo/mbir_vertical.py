@@ -6,9 +6,11 @@ import jax.numpy as jnp
 import scipy
 import mbirjax
 import demo_utils
-import SimpleITK
+import SimpleITK as sitk
 import nrrd
 import pprint
+import mbirjax.plot_utils as pu
+from multipose_utils import transform_utils
 
 pp = pprint.PrettyPrinter(indent=4)
 
@@ -73,10 +75,10 @@ if __name__ == "__main__":
     ct_model.print_params()
 
     print("\n*******************************************************",
-          "\n***** Calculate transmission_root sinogram weights ****",
+          "\n******* Calculate transmission sinogram weights *******",
           "\n*******************************************************")
-    weights_trans = ct_model.gen_weights(sino, weight_type='transmission_root')
-
+    weights_trans = ct_model.gen_weights(sino, weight_type='transmission')
+    
     print("\n*******************************************************",
           "\n**** Perform recon with transmission_root weights. ****",
           "\n*******************************************************")
@@ -90,7 +92,29 @@ if __name__ == "__main__":
     recon.block_until_ready()
     elapsed = time.time() - time0
     print('Elapsed time for initial recon is {:.3f} seconds'.format(elapsed))
+    np.save(os.path.join(output_path, "recon_vertical.npy"), recon)
     # ##########################
+    
+    # ##### rotate the recon images to an upright pose. This will be the reconstruction pose of multi-pose fusion algorithm
+    transform_info_vert_to_upright = sitk.Euler3DTransform()
+    transform_info_vert_to_upright.SetRotation(0, np.deg2rad(17.165), 0)
+    # save transform information to disk
+    sitk.WriteTransform(transform_info_vert_to_upright, os.path.join(output_path, "transform_info_vert_to_upright.tfm"))
 
-    # rotate the recon images to an upright pose
-    nrrd.write(os.path.join(output_path, "recon_orig_pose.nrrd"), recon)
+    # apply the transformation to the recon array
+    recon_transformed = transform_utils.transformer_sitk(recon, transform_info_vert_to_upright)
+    
+    print("\n*******************************************************",
+          "\n********* Display results in different poses. *********",
+          "\n*******************************************************")
+    # change the image data shape to (slices, rows, cols), so that the rotation axis points up when viewing the coronal/sagittal slices with mbirjax slice_viewer
+    recon = np.transpose(recon, (2, 1, 0))
+    recon = recon[:, :, ::-1]
+
+    recon_transformed = np.transpose(recon_transformed, (2, 1, 0))
+    recon_transformed = recon_transformed[:, :, ::-1]
+    
+    # ##### display the results in measurement and reconstruction poses respectively
+    vmax = downsample_factor[0] * 0.008
+    pu.slice_viewer(recon, vmin=0, vmax=vmax, slice_axis=1, slice_label='Coronal Slice', title='MBIRJAX recon, measurement pose')
+    pu.slice_viewer(recon_transformed, vmin=0, vmax=vmax, slice_axis=1, slice_label='Coronal Slice', title='MBIRJAX recon, upright pose')
